@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="/lib/jquery/jquery-3.1.1.min.js"></script>
+    <link href="/lib/bootstrap/css/flatly.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="/lib/jquery/jquery-ui.min.css" />
+    <script src="/lib/jquery/jquery-ui.min.js"></script>
+    <style>
+      #map {
+        height: 700px;
+        width: 100%;
+       }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-default">
+  <div class="container-fluid">
+    <div class="navbar-header">
+      <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#bs-example-navbar-collapse-1">
+        <span class="sr-only">Toggle navigation</span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+      </button>
+      <a class="navbar-brand" href="#">Aircraft Track</a>
+    </div>
+
+    <div class="collapse navbar-collapse" id="bs-example-navbar-collapse-1">
+        <form class="navbar-form navbar-left" role="search">
+        <div class="form-group">
+          <input type="text" id="flight-name" class="form-control" placeholder="Flight Number" />
+          <input type="text" id="update-interval" class="form-control" placeholder="Update Interval" value="10" />
+        </div>
+      </form>
+    </div>
+    </nav>
+    <div id="messages"></div>
+    <div id="map"></div>
+    <script>
+        var map;
+        var marker;
+        var flightVicinityMarker;
+        var flightInfo;
+        var flightNames;
+        var transponderCode;
+        var objMarkers;
+        var threshold = 1000000;
+
+      function initMap() {
+        var phoenixPos = {lat: 33.4484, lng: -112.0740};
+        map = new google.maps.Map(document.getElementById('map'), {
+          zoom: 11,
+          center: phoenixPos
+        });
+      }
+
+    </script>
+    <script async defer
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBxi6w3Y6DS5PodW0uuljmY_hiL6q22R_E&callback=initMap">
+    </script>
+
+    <script src="/lib/bootstrap/js/bootstrap.min.js"></script>
+    <script>
+        $.ajax({
+            url: 'https://opensky-network.org/api/states/all',
+        }).done(function(data) {
+            var states = data.states;
+            flightInfo = [];
+            flightNames = [];
+            for(var i=0; i<states.length; i++) {
+                var transponderId = states[i][0];
+                var flightName = states[i][1];
+                if (flightName != null && flightName.trim() != "" && transponderId != null && transponderId.trim() != "") {
+                    flightName = flightName.trim();
+                    flightInfo[flightName] = transponderId;
+                    flightNames.push(flightName);
+                }
+            }
+            $('#flight-name').autocomplete({
+                source: function(request, response) {
+                    var results = $.ui.autocomplete.filter(flightNames, request.term);
+                    response(results.slice(0, 10));
+                },
+                minLength: 3,
+                select: function(event, ui) {
+                    if (!transponderCode) {
+                        transponderCode = flightInfo[ui.item.value];
+                        retrieveLatestFlightStatus(getSurroundingObjectsLoc);
+                    }
+                    transponderCode = flightInfo[ui.item.value];
+                }
+            });
+        });
+
+        function retrieveLatestFlightStatus(callbackFn) {
+                    var epochTime = Math.floor(Date.now() / 1000);
+                    var destUrl = 'https://opensky-network.org/api/states/all?time=' + epochTime + '&icao24=' + transponderCode;
+                    
+                    $.ajax({
+                        url: destUrl
+                    }).done(function(newdata) {
+                        if (newdata.states == null) {
+                            showErrorMsg('Livefeed not available.', 'Please choose a different flight');
+                            return;
+                        }
+                        var tempDetails = newdata.states[0];
+                        var flightDetails = {
+                            transponderId: tempDetails[0],
+                            flightName: tempDetails[1],
+                            lat: tempDetails[6],
+                            lng: tempDetails[5],
+                            alt: tempDetails[7]
+                        };
+
+                        updateFlightDetails(flightDetails);
+                    var updateInterval = parseInt($('#update-interval')[0].value) * 1000;
+                    updateInterval = updateInterval < 1000 ? 1000 : updateInterval;
+                    setTimeout(function() {
+                        retrieveLatestFlightStatus();
+                        if (callbackFn) {
+                            console.log('calling the callback function');
+                            callbackFn();
+                        }
+                    }, updateInterval);
+                    });
+
+        }
+
+        function updateFlightDetails(details) {
+            var newpos = new google.maps.LatLng(details.lat, details.lng);
+            if (!marker) {
+                marker = new google.maps.Marker({
+                    position: newpos,
+                    map: map,
+                    icon: {
+                        labelOrigin: new google.maps.Point(0, 0),
+                        url: '/images/plane.png',
+                        scaledSize: new google.maps.Size(32, 32),
+                        size: new google.maps.Size(32, 32)
+                    },
+                    label: details.flightName
+                });
+            }
+            if (!flightVicinityMarker) {
+                flightVicinityMarker = new google.maps.Circle({
+                    strokeColor: '#FF0000',
+                    strokeOpacity: 0.8,
+                    strokeWidth: 2,
+                    fillColor: '#FF0000',
+                    fillOpacity: 0.35,
+                    map: map,
+                    center: newpos,
+                    radius: threshold
+                });
+            }
+            marker.setLabel(details.flightName);
+            marker.setPosition(newpos);
+            map.panTo(newpos);
+            flightVicinityMarker.setCenter(newpos);
+        }
+
+        function showErrorMsg(title, description) {
+            $('#messages').empty();
+             var errorHtml = '<div class="alert alert-dismissible alert-danger">'
+                                + '<button type="button" class="close" data-dismiss="alert">'
+                                + '&times;</button><strong>' + title + '</strong> '
+                                + description + '</div>';
+             $("#messages").append(errorHtml);
+        }
+
+        function getSurroundingObjectsLoc() {
+            var objPos = [];
+
+            $.ajax({
+                url: 'http://ec2-35-165-186-128.us-west-2.compute.amazonaws.com:8080/receive'
+            }).done(function(data) {
+                if (data.Messages && data.Messages[0]) {
+                    var dimensions = data.Messages[0].Body.split(";")[0].split(" ");
+                    var currLat = parseFloat(dimensions[0].substr(3, 30));
+                    var currLng = parseFloat(dimensions[1].substr(3, 30));
+                    //console.log('dist ', distance, 'threshold', (threshold / 1000));
+                    objPos.push({lat: currLat, lng: currLng});
+                }
+                plotSurroundingObjects(objPos);
+                setTimeout(function() {
+                    getSurroundingObjectsLoc();
+                }, 2000);
+            });
+
+            /*
+            console.debug('-------')
+            for (var i = 1; i<=10; i++) {
+                currLat = lat + getRandomArbitrary(0.01, 0.1);
+                currLng = lng + getRandomArbitrary(0.01, 0.1);
+                console.debug(getDistanceFromLatLonInKm(currLat, currLng, lat, lng));
+                objPos.push({lat: currLat, lng: currLng});
+            }
+            */
+        }
+
+        function plotSurroundingObjects(surroundingObjsLoc) {
+            var lat = marker.getPosition().lat();
+            var lng = marker.getPosition().lng();
+            console.debug('surrounding', surroundingObjsLoc);
+            if (! objMarkers) {
+                objMarkers = [];
+            }
+            var currObjMarker;
+            
+            for (var i=0; currObjMarker = objMarkers[i]; i++) {
+                currObjMarker.setMap(null);
+            }
+            objMarkers = [];
+            
+            var currObjLoc;
+            $('#messages').empty();
+            for (var i=0; currObjLoc = surroundingObjsLoc[i]; i++) {
+                    var distance = getDistanceFromLatLonInKm(currObjLoc.lat, currObjLoc.lng, lat, lng);
+                    if (distance < (threshold / 1000)) {
+                        showErrorMsg('Red Alert', 'A flying object in range');
+                    }
+                currObjMarker = new google.maps.Marker({
+                    position: currObjLoc,
+                    map: map,                    
+                    icon: {
+                        url: '/images/red-circle.png',
+                        scaledSize: new google.maps.Size(16, 16),
+                        size: new google.maps.Size(16, 16)
+                    }
+                });
+                objMarkers.push(currObjMarker);
+            }
+        }
+
+        function getRandomArbitrary(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        function getDistanceFromLatLonInKm(lat1,lon1,lat2,lon2) {
+            var R = 6371; // Radius of the earth in km
+            var dLat = deg2rad(lat2-lat1);  // deg2rad below
+            var dLon = deg2rad(lon2-lon1); 
+            var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+                        Math.sin(dLon/2) * Math.sin(dLon/2); 
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+            var d = R * c; // Distance in km
+            return d;
+        }
+
+function deg2rad(deg) {
+  return deg * (Math.PI/180)
+}
+    </script>
+  </body>
+</html>
